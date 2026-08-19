@@ -34,7 +34,10 @@ this factory.
 
 - **Config-driven**: polls `GET /api/camera-agent/config` every `CONFIG_REFRESH_SECONDS`.
   Cameras added/updated/removed on the backend are started, restarted, or stopped
-  automatically (restart only touches the affected camera's process).
+  automatically (restart only touches the affected camera's process). Set `STREAM_URL`
+  (and `RTMP_PUBLISH_URL`) in `.env` to skip that API and stream a single local camera.
+  `npm run pull-local-config` fills those URLs plus a 7-day Agora viewer token from the
+  backend in one shot.
 - **Streams with FFmpeg**: reads the RTSP camera and publishes to
   `rtmp://…/live/<streamKey>` on the Agora ingest gateway. `transcodeEnabled` cameras get
   a libx264 re-encode; otherwise the stream is copied (`-c copy`) straight through.
@@ -71,6 +74,23 @@ npm run dev                 # tsx src/index.ts
 
 The agent logs to stdout/stderr in development. In production it runs as a native OS
 service (see below) and writes to log files.
+
+## Local stream + Agora viewer (no backend after snapshot)
+
+Use this to confirm the camera is publishing to Agora without polling the backend.
+
+1. Backend running; agent created; at least one camera assigned with a stream key.
+2. Set `BACKEND_URL` and `AGENT_API_KEY` in `.env`.
+3. `npm run pull-local-config` — writes `STREAM_URL`, `RTMP_PUBLISH_URL`, `AGORA_APP_ID`,
+   `AGORA_CHANNEL`, `AGORA_RTC_TOKEN`, and `AGORA_RTC_TOKEN_EXPIRES_AT` (about 7 days).
+4. `npm run dev` — agent streams RTSP to Agora and does not call `GET /api/camera-agent/config`.
+5. `npm run viewer` — open `http://127.0.0.1:3456` (loopback only). The page joins Agora
+   with the cached subscriber token; it does not call the camera backend. The Agora Web SDK
+   is served from the local `agora-rtc-sdk-ng` install (`/agora-rtc-sdk.js`), so no CDN is
+   needed — run `npm install` if the page reports the SDK did not load.
+6. Before the token or stream key expires, run `pull-local-config` again (backend must be up).
+
+The Agora App Certificate never leaves the backend and is not stored on the agent.
 
 ## Setup on a fresh Windows machine
 
@@ -193,7 +213,13 @@ software; step 3 onward deploys and runs the agent.
 | `LOG_LEVEL` | `info` | pino log level |
 | `BACKEND_URL` | `http://localhost:3000` | Backend base URL |
 | `AGENT_ID` | — | Optional explicit agent id (normally derived from the API key lookup) |
-| `AGENT_API_KEY` | — | **Required.** Returned once when the agent is created in the backend |
+| `AGENT_API_KEY` | — | **Required unless `STREAM_URL` is set.** Returned once when the agent is created in the backend |
+| `STREAM_URL` | — | Optional camera RTSP URL. When set, the agent does **not** call `GET /api/camera-agent/config` |
+| `RTMP_PUBLISH_URL` | — | Required when `STREAM_URL` is set. Agora RTMP ingest URL (`rtmp://…/live/<streamKey>`) |
+| `AGORA_APP_ID` | — | Written by `pull-local-config`. Public App ID for the local viewer |
+| `AGORA_CHANNEL` | — | Written by `pull-local-config`. Agora channel bound to the stream key |
+| `AGORA_RTC_TOKEN` / `AGORA_RTC_TOKEN_EXPIRES_AT` | — | Written by `pull-local-config`. 7-day subscriber token for `npm run viewer` |
+| `AGORA_VIEWER_PORT` | `3456` | Local viewer HTTP port (`127.0.0.1` only) |
 | `FFMPEG_PATH` | `ffmpeg` | Path to the FFmpeg binary |
 | `HEARTBEAT_INTERVAL_SECONDS` | `15` | Heartbeat cadence (min 5) |
 | `CONFIG_REFRESH_SECONDS` | `30` | Config poll cadence (min 5) |
@@ -368,7 +394,7 @@ it can fetch its first config.
 
 ```bash
 npm run typecheck   # tsc --noEmit
-npm test            # vitest run (91 tests: ffmpeg args, backoff, log parsing, config diff, orchestrator, HTTP retry, heartbeat, process manager restart scenarios, screenshots, platform services)
+npm test            # vitest run (100 tests: ffmpeg args, backoff, log parsing, config diff, orchestrator, HTTP retry, heartbeat, process manager restart scenarios, screenshots, platform services, local viewer snapshot)
 ```
 
 Tests run against a fake FFmpeg child process and a stub HTTP backend — no FFmpeg or
