@@ -1,17 +1,108 @@
 import type { AgentConfigCamera, AgentConfigResponse } from '../types/agentConfig';
-import { maskUrl } from '../utils/mask';
+import { configuredCameras, type StoredCamerasFile } from '../localMode/camerasFile';
+import { maskRtmpUrl, maskUrl } from '../utils/mask';
 import type { Logger } from '../utils/loggerTypes';
 import type { AgentApi } from '../api/agentApi';
+import { env } from '../config/env';
 
 const LOCAL_CAMERA_ID = 1;
 
 function rtmpParts(rtmpPublishUrl: string): { rtmpBaseUrl: string; streamKey: string } {
-  const trimmed = rtmpPublishUrl.replace(/\/+$/, '');
-  const slash = trimmed.lastIndexOf('/');
-  if (slash <= 0 || slash === trimmed.length - 1) {
-    return { rtmpBaseUrl: trimmed, streamKey: '' };
+  const u = new URL(rtmpPublishUrl);
+  const trimmedPath = u.pathname.replace(/\/+$/, '');
+  const slash = trimmedPath.lastIndexOf('/');
+  if (slash <= 0 || slash === trimmedPath.length - 1) {
+    return { rtmpBaseUrl: rtmpPublishUrl.replace(/\/+$/, ''), streamKey: '' };
   }
-  return { rtmpBaseUrl: trimmed.slice(0, slash), streamKey: trimmed.slice(slash + 1) };
+
+  const streamKey = trimmedPath.slice(slash + 1);
+  u.pathname = trimmedPath.slice(0, slash) || '/';
+  return { rtmpBaseUrl: u.toString(), streamKey };
+}
+
+function resolveLocalVideoSettings(video?: Partial<LocalVideoSettings>): LocalVideoSettings {
+  return {
+    width: video?.width ?? DEFAULT_LOCAL_VIDEO.width,
+    height: video?.height ?? DEFAULT_LOCAL_VIDEO.height,
+    fps: video?.fps ?? DEFAULT_LOCAL_VIDEO.fps,
+    bitrateKbps: video?.bitrateKbps ?? DEFAULT_LOCAL_VIDEO.bitrateKbps,
+    transcodeEnabled: video?.transcodeEnabled ?? DEFAULT_LOCAL_VIDEO.transcodeEnabled,
+    audioEnabled: video?.audioEnabled ?? DEFAULT_LOCAL_VIDEO.audioEnabled,
+  };
+}
+
+export interface LocalVideoSettings {
+  width: number;
+  height: number;
+  fps: number;
+  bitrateKbps: number;
+  transcodeEnabled: boolean;
+  audioEnabled: boolean;
+}
+
+const DEFAULT_LOCAL_VIDEO: LocalVideoSettings = {
+  width: 1920,
+  height: 1080,
+  fps: 25,
+  bitrateKbps: 3000,
+  transcodeEnabled: true,
+  audioEnabled: true,
+};
+
+function buildLocalVideoSettings(video: LocalVideoSettings) {
+  return {
+    codec: 'libx264',
+    preset: 'veryfast',
+    width: video.width,
+    height: video.height,
+    fps: video.fps,
+    bitrateKbps: video.bitrateKbps,
+    maxrateKbps: video.bitrateKbps,
+    bufsizeKbps: video.bitrateKbps * 2,
+    transcodeEnabled: video.transcodeEnabled,
+    rtspTransport: 'tcp',
+  };
+}
+
+export function buildLocalCamera(opts: {
+  id: number;
+  name: string;
+  streamUrl: string;
+  rtmpPublishUrl: string;
+  uid?: string;
+  channel?: string;
+  video?: Partial<LocalVideoSettings>;
+}): AgentConfigCamera {
+  const { rtmpBaseUrl, streamKey } = rtmpParts(opts.rtmpPublishUrl);
+  const video = resolveLocalVideoSettings(opts.video);
+  return {
+    id: opts.id,
+    name: opts.name,
+    rtspUrl: opts.streamUrl,
+    channel: opts.channel ?? env.AGORA_CHANNEL,
+    uid: opts.uid ?? String(1000 + opts.id),
+    rtmpBaseUrl,
+    streamKey,
+    rtmpPublishUrl: opts.rtmpPublishUrl,
+    streamKeyExpiresAt: new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString(),
+    video: buildLocalVideoSettings(video),
+    audio: { enabled: video.audioEnabled, codec: 'aac', bitrateKbps: 160 },
+  };
+}
+
+export function toAgentCameras(
+  file: StoredCamerasFile,
+  video?: Partial<LocalVideoSettings>,
+): AgentConfigCamera[] {
+  return configuredCameras(file).map((camera) =>
+    buildLocalCamera({
+      id: camera.id,
+      name: camera.name,
+      streamUrl: camera.rtspUrl,
+      rtmpPublishUrl: camera.rtmpPublishUrl,
+      video,
+    }),
+  );
 }
 
 /** Synthetic config used when STREAM_URL is set in the environment. */
@@ -19,37 +110,21 @@ export function buildLocalAgentConfig(opts: {
   streamUrl: string;
   rtmpPublishUrl: string;
   agentId: string;
+  video?: Partial<LocalVideoSettings>;
 }): AgentConfigResponse {
-  const { rtmpBaseUrl, streamKey } = rtmpParts(opts.rtmpPublishUrl);
   return {
     agent: { id: opts.agentId, name: 'local', deviceId: 'local' },
     configVersion: 1,
     heartbeatIntervalSeconds: 15,
     cameras: [
-      {
+      buildLocalCamera({
         id: LOCAL_CAMERA_ID,
         name: 'Local camera',
-        rtspUrl: opts.streamUrl,
-        channel: 'local',
-        uid: '1001',
-        rtmpBaseUrl,
-        streamKey,
+        streamUrl: opts.streamUrl,
         rtmpPublishUrl: opts.rtmpPublishUrl,
-        streamKeyExpiresAt: new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString(),
-        video: {
-          codec: 'libx264',
-          preset: 'veryfast',
-          width: 1920,
-          height: 1080,
-          fps: 25,
-          bitrateKbps: 3000,
-          maxrateKbps: 3000,
-          bufsizeKbps: 6000,
-          transcodeEnabled: true,
-          rtspTransport: 'tcp',
-        },
-        audio: { enabled: true, codec: 'aac', bitrateKbps: 160 },
-      },
+        uid: '1001',
+        video: opts.video,
+      }),
     ],
   };
 }
@@ -130,6 +205,7 @@ export class ConfigService {
       fallbackAgentId?: string;
       localStreamUrl?: string;
       localRtmpPublishUrl?: string;
+      localVideo?: Partial<LocalVideoSettings>;
     },
   ) {}
 
@@ -155,6 +231,14 @@ export class ConfigService {
       streamUrl,
       rtmpPublishUrl,
       agentId: this.deps.fallbackAgentId || 'local-agent',
+      video: this.deps.localVideo ?? {
+        width: env.LOCAL_VIDEO_WIDTH,
+        height: env.LOCAL_VIDEO_HEIGHT,
+        fps: env.LOCAL_VIDEO_FPS,
+        bitrateKbps: env.LOCAL_VIDEO_BITRATE_KBPS,
+        transcodeEnabled: env.LOCAL_VIDEO_TRANSCODE,
+        audioEnabled: env.LOCAL_AUDIO_ENABLED,
+      },
     });
   }
 
@@ -170,7 +254,7 @@ export class ConfigService {
       next = this.localConfig();
       if (!this.current) {
         this.deps.logger.info(
-          { rtsp: maskUrl(next.cameras[0]!.rtspUrl), rtmp: maskUrl(next.cameras[0]!.rtmpPublishUrl) },
+          { rtsp: maskUrl(next.cameras[0]!.rtspUrl), rtmp: maskRtmpUrl(next.cameras[0]!.rtmpPublishUrl) },
           'using STREAM_URL from env; skipping backend config API',
         );
       }

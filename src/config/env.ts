@@ -6,6 +6,27 @@ import { z } from 'zod';
 // directory (important when running as a Windows Service under LocalSystem).
 dotenv.config({ path: path.join(__dirname, '..', '..', '.env') });
 
+/** Treats an empty or whitespace-only value as "not set" so a blank line in
+ * .env falls back to the default instead of failing validation. */
+function optional(schema: z.ZodTypeAny): z.ZodTypeAny {
+  return z.preprocess((v) => (typeof v === 'string' && v.trim() === '' ? undefined : v), schema);
+}
+
+/** z.coerce.boolean() maps the string "false" to true, so parse explicitly. */
+function boolean(defaultValue: boolean): z.ZodTypeAny {
+  return optional(
+    z.preprocess((v) => {
+      if (typeof v !== 'string') return v;
+      const text = v.trim().toLowerCase();
+      if (['1', 'true', 'yes', 'on'].includes(text)) return true;
+      if (['0', 'false', 'no', 'off'].includes(text)) return false;
+      return v;
+    }, z.boolean().default(defaultValue)),
+  );
+}
+
+export const DEFAULT_AGORA_CHANNEL = 'offroad_cam_1';
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   LOG_LEVEL: z.string().default('info'),
@@ -27,23 +48,26 @@ const envSchema = z.object({
     z.string().min(1).optional(),
   ),
 
-  AGORA_APP_ID: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().min(1).optional(),
-  ),
+  // Shared Agora channel for local publishers. Stream keys must match this
+  // channel. Operators do not set App ID or token in this package.
   AGORA_CHANNEL: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().min(1).optional(),
+    z.string().min(1).default(DEFAULT_AGORA_CHANNEL),
   ),
-  AGORA_RTC_TOKEN: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().min(1).optional(),
-  ),
-  AGORA_RTC_TOKEN_EXPIRES_AT: z.preprocess(
-    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-    z.string().min(1).optional(),
-  ),
+  // File-mode control UI binds 127.0.0.1 on this port. Backend mode skips it.
   AGORA_VIEWER_PORT: z.coerce.number().int().min(1).max(65535).default(3456),
+
+  // Encode target for file mode and STREAM_URL local stream (ignored when the
+  // backend config is used). Match these to what the camera actually delivers:
+  // forcing a higher resolution than the source only wastes CPU and uplink.
+  LOCAL_VIDEO_WIDTH: optional(z.coerce.number().int().min(16).max(7680).default(1920)),
+  LOCAL_VIDEO_HEIGHT: optional(z.coerce.number().int().min(16).max(4320).default(1080)),
+  LOCAL_VIDEO_FPS: optional(z.coerce.number().int().min(1).max(60).default(25)),
+  LOCAL_VIDEO_BITRATE_KBPS: optional(z.coerce.number().int().min(100).max(50_000).default(3000)),
+  // When false FFmpeg remuxes with -c copy instead of re-encoding, which needs
+  // the source to already be H.264 (and AAC if audio stays enabled).
+  LOCAL_VIDEO_TRANSCODE: boolean(true),
+  LOCAL_AUDIO_ENABLED: boolean(true),
 
   FFMPEG_PATH: z.string().default('ffmpeg'),
 

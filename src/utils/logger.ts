@@ -14,7 +14,6 @@ export const logger = pino({
       '*.rtmpPublishUrl',
       '*.authorization',
       '*.token',
-      'AGORA_RTC_TOKEN',
     ],
     censor: '[REDACTED]',
   },

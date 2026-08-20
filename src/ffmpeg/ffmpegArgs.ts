@@ -39,7 +39,16 @@ export function buildFfmpegArgs(camera: AgentConfigCamera, options: BuildArgsOpt
     }
   }
 
+  // Live ingest: do not let slow RTSP timestamps accumulate minutes of delay
+  // in Agora. Wall-clock PTS + low-delay flags keep the published stream near
+  // realtime even when the camera delivers less than 1x.
   args.push(
+    '-fflags',
+    '+nobuffer+genpts+discardcorrupt',
+    '-flags',
+    'low_delay',
+    '-use_wallclock_as_timestamps',
+    '1',
     '-probesize',
     env.FFMPEG_PROBESIZE,
     '-analyzeduration',
@@ -54,6 +63,8 @@ export function buildFfmpegArgs(camera: AgentConfigCamera, options: BuildArgsOpt
       camera.video.codec || 'libx264',
       '-preset',
       camera.video.preset || 'veryfast',
+      '-tune',
+      'zerolatency',
       '-b:v',
       `${camera.video.bitrateKbps}k`,
       '-maxrate',
@@ -90,6 +101,10 @@ export function buildFfmpegArgs(camera: AgentConfigCamera, options: BuildArgsOpt
         '44100',
         '-ac',
         '2',
+        // IP Webcam ulaw + wall-clock PTS can go slightly backwards; stretch
+        // AAC so FLV/RTMP does not get non-monotonic DTS.
+        '-af',
+        'aresample=async=1:first_pts=0',
       );
     } else {
       args.push('-c:a', 'copy');

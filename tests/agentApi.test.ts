@@ -120,21 +120,6 @@ describe('AgentApi retry behaviour', () => {
     expect(calls).toHaveLength(3); // initial + 2 retries
   });
 
-  it('fetches a viewer session from the agent endpoint', async () => {
-    const { api, http } = makeApi();
-    const payload = {
-      appId: 'app',
-      channel: 'offroad_cam_1',
-      uid: 0,
-      role: 'subscriber' as const,
-      token: '007x',
-      expiresAt: new Date().toISOString(),
-    };
-    http.get.mockResolvedValueOnce({ data: payload });
-    await expect(api.fetchViewerSession()).resolves.toEqual(payload);
-    expect(http.get).toHaveBeenCalledWith('/api/camera-agent/viewer-session');
-  });
-
   it('sends heartbeats and screenshots through the same retry path', async () => {
     vi.useFakeTimers();
     const { api, http, calls } = makeApi();

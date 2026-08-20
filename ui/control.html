@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Camera publisher</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: system-ui, sans-serif;
+      }
+      body {
+        margin: 0;
+        background: #111;
+        color: #eee;
+      }
+      header,
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        align-items: center;
+        padding: 0.75rem 1rem;
+      }
+      header {
+        background: #1c1c1c;
+      }
+      #banner {
+        min-height: 1.25rem;
+        color: #ff8a8a;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th,
+      td {
+        padding: 0.4rem 0.5rem;
+        border-bottom: 1px solid #333;
+        vertical-align: top;
+        text-align: left;
+      }
+      input[type='text'],
+      input[type='password'] {
+        width: 16rem;
+        max-width: 32vw;
+      }
+      .error,
+      .state {
+        min-width: 8rem;
+      }
+      .error {
+        color: #ff8a8a;
+      }
+      button {
+        padding: 0.35rem 0.7rem;
+        cursor: pointer;
+      }
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Camera publisher</h1>
+      <div id="banner" role="status"></div>
+    </header>
+    <div class="actions">
+      <button type="button" id="save">Save configuration</button>
+      <button type="button" id="start-all">Start all</button>
+      <button type="button" id="stop-all">Stop all</button>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>RTSP URL</th>
+          <th>RTMP URL</th>
+          <th></th>
+          <th>Enabled</th>
+          <th>Status</th>
+          <th>Last error</th>
+          <th>PID</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr data-id="1">
+          <td><input class="name" type="text" aria-label="Camera 1 name" /></td>
+          <td><input class="rtsp" type="password" data-initial="" aria-label="Camera 1 RTSP URL" /></td>
+          <td><input class="rtmp" type="password" data-initial="" aria-label="Camera 1 RTMP URL" /></td>
+          <td><button type="button" class="toggle">Show</button></td>
+          <td><input class="enabled" type="checkbox" aria-label="Camera 1 enabled" /></td>
+          <td class="state"></td>
+          <td class="error"></td>
+          <td class="pid"></td>
+          <td>
+            <button type="button" class="start">Start</button>
+            <button type="button" class="stop">Stop</button>
+            <button type="button" class="restart">Restart</button>
+          </td>
+        </tr>
+        <tr data-id="2">
+          <td><input class="name" type="text" aria-label="Camera 2 name" /></td>
+          <td><input class="rtsp" type="password" data-initial="" aria-label="Camera 2 RTSP URL" /></td>
+          <td><input class="rtmp" type="password" data-initial="" aria-label="Camera 2 RTMP URL" /></td>
+          <td><button type="button" class="toggle">Show</button></td>
+          <td><input class="enabled" type="checkbox" aria-label="Camera 2 enabled" /></td>
+          <td class="state"></td>
+          <td class="error"></td>
+          <td class="pid"></td>
+          <td>
+            <button type="button" class="start">Start</button>
+            <button type="button" class="stop">Stop</button>
+            <button type="button" class="restart">Restart</button>
+          </td>
+        </tr>
+        <tr data-id="3">
+          <td><input class="name" type="text" aria-label="Camera 3 name" /></td>
+          <td><input class="rtsp" type="password" data-initial="" aria-label="Camera 3 RTSP URL" /></td>
+          <td><input class="rtmp" type="password" data-initial="" aria-label="Camera 3 RTMP URL" /></td>
+          <td><button type="button" class="toggle">Show</button></td>
+          <td><input class="enabled" type="checkbox" aria-label="Camera 3 enabled" /></td>
+          <td class="state"></td>
+          <td class="error"></td>
+          <td class="pid"></td>
+          <td>
+            <button type="button" class="start">Start</button>
+            <button type="button" class="stop">Stop</button>
+            <button type="button" class="restart">Restart</button>
+          </td>
+        </tr>
+        <tr data-id="4">
+          <td><input class="name" type="text" aria-label="Camera 4 name" /></td>
+          <td><input class="rtsp" type="password" data-initial="" aria-label="Camera 4 RTSP URL" /></td>
+          <td><input class="rtmp" type="password" data-initial="" aria-label="Camera 4 RTMP URL" /></td>
+          <td><button type="button" class="toggle">Show</button></td>
+          <td><input class="enabled" type="checkbox" aria-label="Camera 4 enabled" /></td>
+          <td class="state"></td>
+          <td class="error"></td>
+          <td class="pid"></td>
+          <td>
+            <button type="button" class="start">Start</button>
+            <button type="button" class="stop">Stop</button>
+            <button type="button" class="restart">Restart</button>
+          </td>
+        </tr>
+        <tr data-id="5">
+          <td><input class="name" type="text" aria-label="Camera 5 name" /></td>
+          <td><input class="rtsp" type="password" data-initial="" aria-label="Camera 5 RTSP URL" /></td>
+          <td><input class="rtmp" type="password" data-initial="" aria-label="Camera 5 RTMP URL" /></td>
+          <td><button type="button" class="toggle">Show</button></td>
+          <td><input class="enabled" type="checkbox" aria-label="Camera 5 enabled" /></td>
+          <td class="state"></td>
+          <td class="error"></td>
+          <td class="pid"></td>
+          <td>
+            <button type="button" class="start">Start</button>
+            <button type="button" class="stop">Stop</button>
+            <button type="button" class="restart">Restart</button>
+          </td>
+        </tr>
+        <tr data-id="6">
+          <td><input class="name" type="text" aria-label="Camera 6 name" /></td>
+          <td><input class="rtsp" type="password" data-initial="" aria-label="Camera 6 RTSP URL" /></td>
+          <td><input class="rtmp" type="password" data-initial="" aria-label="Camera 6 RTMP URL" /></td>
+          <td><button type="button" class="toggle">Show</button></td>
+          <td><input class="enabled" type="checkbox" aria-label="Camera 6 enabled" /></td>
+          <td class="state"></td>
+          <td class="error"></td>
+          <td class="pid"></td>
+          <td>
+            <button type="button" class="start">Start</button>
+            <button type="button" class="stop">Stop</button>
+            <button type="button" class="restart">Restart</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <script>
+      const NONCE = '{{NONCE}}';
+      const PORT = '{{PORT}}';
+      const UNCHANGED_SENTINEL = '__unchanged__';
+      const banner = document.getElementById('banner');
+
+      function mutatingHeaders() {
+        return {
+          'Content-Type': 'application/json',
+          'X-Control-Nonce': NONCE,
+        };
+      }
+
+      function rowEls(row) {
+        return {
+          name: row.querySelector('.name'),
+          rtsp: row.querySelector('.rtsp'),
+          rtmp: row.querySelector('.rtmp'),
+          enabled: row.querySelector('.enabled'),
+          state: row.querySelector('.state'),
+          error: row.querySelector('.error'),
+          pid: row.querySelector('.pid'),
+          start: row.querySelector('.start'),
+          stop: row.querySelector('.stop'),
+          restart: row.querySelector('.restart'),
+          toggle: row.querySelector('.toggle'),
+        };
+      }
+
+      function updateActions(row, cam) {
+        const els = rowEls(row);
+        const busy = cam.state === 'Starting' || cam.state === 'Live' || cam.state === 'Reconnecting';
+        const idle = cam.state === 'Not configured' || cam.state === 'Stopped';
+        els.start.disabled = !cam.configured || busy;
+        els.stop.disabled = idle;
+        els.restart.disabled = idle;
+      }
+
+      function fillInputs(row, cam) {
+        const els = rowEls(row);
+        const active = document.activeElement;
+        if (active !== els.name) els.name.value = cam.name;
+        if (active !== els.rtsp) {
+          els.rtsp.value = cam.rtspUrlMasked;
+          els.rtsp.setAttribute('data-initial', cam.rtspUrlMasked);
+        }
+        if (active !== els.rtmp) {
+          els.rtmp.value = cam.rtmpPublishUrlMasked;
+          els.rtmp.setAttribute('data-initial', cam.rtmpPublishUrlMasked);
+        }
+      }
+
+      function applyRuntime(data, fillForm) {
+        banner.textContent = data.invalidMessage || data.ffmpegError || '';
+        for (const cam of data.cameras || []) {
+          const row = document.querySelector('tr[data-id="' + cam.id + '"]');
+          if (!row) continue;
+          const els = rowEls(row);
+          els.state.textContent = cam.state;
+          els.error.textContent = cam.lastError || '';
+          els.pid.textContent = cam.pid == null ? '' : String(cam.pid);
+          updateActions(row, cam);
+          const enabledFocused = document.activeElement === els.enabled;
+          els.enabled.checked = enabledFocused ? els.enabled.checked : cam.enabled;
+          if (fillForm) fillInputs(row, cam);
+        }
+      }
+
+      async function loadCameras(fillForm) {
+        const res = await fetch('/api/cameras');
+        const data = await res.json().catch(function () {
+          return {};
+        });
+        if (!res.ok) {
+          banner.textContent = data.message || 'Failed to load cameras';
+          return null;
+        }
+        applyRuntime(data, fillForm);
+        return data;
+      }
+
+      async function mutate(url, method, body) {
+        const res = await fetch(url, {
+          method: method,
+          headers: mutatingHeaders(),
+          body: body !== undefined ? JSON.stringify(body) : undefined,
+        });
+        const data = await res.json().catch(function () {
+          return {};
+        });
+        if (!res.ok) {
+          banner.textContent = data.message || 'Request failed';
+          if (data.fieldErrors) {
+            for (const id of Object.keys(data.fieldErrors)) {
+              const row = document.querySelector('tr[data-id="' + id + '"]');
+              if (row) rowEls(row).error.textContent = data.fieldErrors[id];
+            }
+          }
+          return null;
+        }
+        applyRuntime(data, method === 'PUT');
+        return data;
+      }
+
+      function urlOrSentinel(input) {
+        return input.value === input.getAttribute('data-initial') ? UNCHANGED_SENTINEL : input.value;
+      }
+
+      document.getElementById('save').addEventListener('click', function () {
+        const cameras = Array.prototype.map.call(document.querySelectorAll('tr[data-id]'), function (row) {
+          const els = rowEls(row);
+          return {
+            id: Number(row.getAttribute('data-id')),
+            name: els.name.value,
+            rtspUrl: urlOrSentinel(els.rtsp),
+            rtmpPublishUrl: urlOrSentinel(els.rtmp),
+            enabled: els.enabled.checked,
+          };
+        });
+        mutate('/api/cameras', 'PUT', { cameras: cameras }).catch(function (err) {
+          banner.textContent = String(err.message || err);
+        });
+      });
+
+      document.getElementById('start-all').addEventListener('click', function () {
+        mutate('/api/cameras/start-all', 'POST').catch(function (err) {
+          banner.textContent = String(err.message || err);
+        });
+      });
+
+      document.getElementById('stop-all').addEventListener('click', function () {
+        mutate('/api/cameras/stop-all', 'POST').catch(function (err) {
+          banner.textContent = String(err.message || err);
+        });
+      });
+
+      Array.prototype.forEach.call(document.querySelectorAll('tr[data-id]'), function (row) {
+        const els = rowEls(row);
+        const id = row.getAttribute('data-id');
+        els.start.addEventListener('click', function () {
+          mutate('/api/cameras/' + id + '/start', 'POST').catch(function (err) {
+            banner.textContent = String(err.message || err);
+          });
+        });
+        els.stop.addEventListener('click', function () {
+          mutate('/api/cameras/' + id + '/stop', 'POST').catch(function (err) {
+            banner.textContent = String(err.message || err);
+          });
+        });
+        els.restart.addEventListener('click', function () {
+          mutate('/api/cameras/' + id + '/restart', 'POST').catch(function (err) {
+            banner.textContent = String(err.message || err);
+          });
+        });
+        els.toggle.addEventListener('click', function () {
+          const next = els.rtsp.type === 'password' ? 'text' : 'password';
+          els.rtsp.type = next;
+          els.rtmp.type = next;
+          els.toggle.textContent = next === 'password' ? 'Show' : 'Hide';
+        });
+      });
+
+      loadCameras(true).catch(function (err) {
+        banner.textContent = String(err.message || err);
+      });
+      setInterval(function () {
+        loadCameras(false).catch(function () {});
+      }, 2000);
+    </script>
+  </body>
+</html>

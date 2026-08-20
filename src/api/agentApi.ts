@@ -1,5 +1,5 @@
 import axios, { AxiosError, type AxiosInstance } from 'axios';
-import type { AgentConfigResponse, HeartbeatPayload, ViewerSessionResponse } from '../types/agentConfig';
+import type { AgentConfigResponse, HeartbeatPayload } from '../types/agentConfig';
 import { env } from '../config/env';
 import type { Logger } from '../utils/loggerTypes';
 
@@ -81,13 +81,6 @@ export class AgentApi {
       const { data } = await this.http.get<AgentConfigResponse>('/api/camera-agent/config');
       return data;
     }, 'fetchConfig');
-  }
-
-  async fetchViewerSession(): Promise<ViewerSessionResponse> {
-    return this.withRetry(async () => {
-      const { data } = await this.http.get<ViewerSessionResponse>('/api/camera-agent/viewer-session');
-      return data;
-    }, 'fetchViewerSession');
   }
 
   async sendHeartbeat(payload: HeartbeatPayload): Promise<void> {

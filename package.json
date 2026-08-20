@@ -13,8 +13,6 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "pull-local-config": "tsx scripts/pullLocalConfig.ts",
-    "viewer": "tsx scripts/viewer.ts",
     "service:install": "tsx scripts/service.ts install",
     "service:start": "tsx scripts/service.ts start",
     "service:stop": "tsx scripts/service.ts stop",
@@ -33,7 +31,6 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
-    "agora-rtc-sdk-ng": "^4.24.7",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "vitest": "^2.1.8"

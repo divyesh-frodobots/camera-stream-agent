@@ -29,6 +29,20 @@ describe('parseFfmpegLine', () => {
     expect(parseFfmpegLine('Authentication failed').errorCategory).toBe('auth');
   });
 
+  it('does not treat DTS timestamp numbers as HTTP 401/404', () => {
+    const dts = parseFfmpegLine(
+      '[aost#0:1/aac @ 0x717060900] Non-monotonic DTS; previous: 184051, current: 184039; changing to 184051. This may result in incorrect timestamps in the output file.',
+    );
+    expect(dts.kind).toBe('warning');
+    expect(dts.errorCategory).toBeUndefined();
+
+    const dts404 = parseFfmpegLine(
+      '[aost#0:1/aac @ 0x717060900] Non-monotonic DTS; previous: 240492, current: 240489; changing to 240492. This may result in incorrect timestamps in the output file.',
+    );
+    expect(dts404.kind).toBe('warning');
+    expect(dts404.errorCategory).toBeUndefined();
+  });
+
   it('classifies not-found errors', () => {
     expect(parseFfmpegLine('Server returned 404 Not Found').errorCategory).toBe('not_found');
     expect(parseFfmpegLine('rtsp://...: No such file or directory').errorCategory).toBe('not_found');

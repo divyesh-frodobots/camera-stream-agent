@@ -56,12 +56,3 @@ export interface HeartbeatPayload {
   version: string;
   cameras: HeartbeatCameraState[];
 }
-
-export interface ViewerSessionResponse {
-  appId: string;
-  channel: string;
-  uid: number;
-  role: 'subscriber';
-  token: string;
-  expiresAt: string;
-}

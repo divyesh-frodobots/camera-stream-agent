@@ -106,6 +106,32 @@ describe('buildFfmpegArgs', () => {
     expect(args[args.indexOf('-progress') + 1]).toBe('pipe:1');
   });
 
+  it('uses low-delay live ingest flags so RTSP timestamp drift does not delay Agora', () => {
+    const args = buildFfmpegArgs(makeCamera());
+    expect(args).toContain('-use_wallclock_as_timestamps');
+    expect(args[args.indexOf('-use_wallclock_as_timestamps') + 1]).toBe('1');
+    expect(args).toContain('+nobuffer+genpts+discardcorrupt');
+    expect(args).toContain('low_delay');
+    expect(args).toContain('-tune');
+    expect(args[args.indexOf('-tune') + 1]).toBe('zerolatency');
+  });
+
+  it('stretches AAC timestamps so wall-clock ulaw audio does not produce non-monotonic DTS', () => {
+    const args = buildFfmpegArgs(makeCamera());
+    expect(args).toContain('-af');
+    expect(args[args.indexOf('-af') + 1]).toBe('aresample=async=1:first_pts=0');
+  });
+
+  it('does not add an audio filter when audio is copied or disabled', () => {
+    const copied = makeCamera();
+    copied.video = { ...copied.video, transcodeEnabled: false };
+    expect(buildFfmpegArgs(copied)).not.toContain('-af');
+
+    const silent = makeCamera();
+    silent.audio = { ...silent.audio, enabled: false };
+    expect(buildFfmpegArgs(silent)).not.toContain('-af');
+  });
+
   it('appends extra arguments before the output URL', () => {
     const args = buildFfmpegArgs(makeCamera(), { extraArgs: ['-flvflags', 'no_duration_filesize'] });
     expect(args).toContain('-flvflags');

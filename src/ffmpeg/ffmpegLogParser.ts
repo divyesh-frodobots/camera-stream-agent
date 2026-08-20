@@ -33,8 +33,8 @@ const ERROR_PATTERNS: Array<{ category: FfmpegErrorCategory; pattern: RegExp }> 
     category: 'rtsp_connect',
     pattern: /(rtsp[\s:/].*(connection|refused|reset|timed out|closed|error|failed|timeout))|(could not connect.*server)|(unable to open|failed to connect).*rtsp/i,
   },
-  { category: 'auth', pattern: /(401|403|unauthorized|permission denied|authentication failed)/i },
-  { category: 'not_found', pattern: /(404|not found|no such file|failed to open|server returned)/i },
+  { category: 'auth', pattern: /(\b401\b|\b403\b|unauthorized|permission denied|authentication failed)/i },
+  { category: 'not_found', pattern: /(\b404\b|not found|no such file|failed to open|server returned)/i },
   { category: 'invalid_data', pattern: /(invalid data|invalid frame|corrupt|malformed|bad header|error while decoding)/i },
   { category: 'no_input', pattern: /(could not open input|no such stream|no input)/i },
 ];
@@ -52,6 +52,10 @@ export function parseFfmpegLine(rawLine: string): ParsedFfmpegLine {
   const progressMatch = /^(frame|fps|bitrate|total_size|out_time_us|out_time_ms|speed|progress)=(.+)$/.exec(trimmed);
   if (progressMatch) {
     return { kind: 'progress', line: trimmed, progressKey: progressMatch[1]!, progressValue: progressMatch[2]! };
+  }
+
+  if (/non-monotonic dts/i.test(trimmed) || /queue input is backward in time/i.test(trimmed)) {
+    return { kind: 'warning', line: trimmed };
   }
 
   for (const { category, pattern } of ERROR_PATTERNS) {

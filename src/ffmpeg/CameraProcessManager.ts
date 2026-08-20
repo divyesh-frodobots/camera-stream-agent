@@ -48,9 +48,32 @@ interface ManagedProcess {
   killTimer: NodeJS.Timeout | null;
   healthTimer: NodeJS.Timeout | null;
   startTimer: NodeJS.Timeout | null;
+  // resolves once this child's close handler has finished supervision
+  closeSettled: Promise<void>;
+  resolveClose: () => void;
 }
 
 const LOG_RING_SIZE = 50;
+
+export class ProcessTerminationError extends Error {
+  constructor(
+    readonly cameraId: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'ProcessTerminationError';
+  }
+}
+
+export class StopAllIncompleteError extends Error {
+  constructor(
+    readonly stuckCameraIds: number[],
+    readonly failures: Array<{ cameraId: number; error: unknown }>,
+  ) {
+    super(`stopAll incomplete: ${stuckCameraIds.length} process(es) could not be terminated`);
+    this.name = 'StopAllIncompleteError';
+  }
+}
 
 /**
  * Spawns and supervises one FFmpeg process per camera.
@@ -72,6 +95,9 @@ export class CameraProcessManager extends EventEmitter {
   // cameras that were ever started; keeps status reporting (e.g. STOPPED,
   // restart counts) alive even while no FFmpeg process is running
   private readonly knownCameras = new Set<number>();
+  // serializes start/stop/forget/forceRestart per camera in invocation order
+  private readonly lifecycleQueues = new Map<number, Promise<void>>();
+  private shuttingDown = false;
 
   constructor(
     private readonly deps: {
@@ -97,22 +123,21 @@ export class CameraProcessManager extends EventEmitter {
 
   /** Starts (or restarts with new configuration) the camera process. */
   async start(camera: AgentConfigCamera): Promise<void> {
-    const existing = this.processes.get(camera.id);
-    if (existing && !existing.child.killed && existing.child.exitCode === null && !existing.intentionallyStopped) {
-      this.deps.logger.debug({ cameraId: camera.id }, 'process already running, skipping start');
-      return;
-    }
-    if (existing) {
-      await this.stopInternalAsync(camera.id, 'configuration changed; restarting');
-    }
-    this.spawnProcess(camera);
+    return this.enqueueLifecycle(camera.id, () => this.startInternal(camera));
+  }
+
+  /**
+   * Stops any running child (and cancels a pending auto-restart), resets
+   * backoff for this camera, and spawns the supplied config exactly once.
+   * Concurrent calls for the same camera are serialized; the last call wins.
+   */
+  async forceRestart(camera: AgentConfigCamera): Promise<void> {
+    return this.enqueueLifecycle(camera.id, () => this.forceRestartInternal(camera));
   }
 
   /** Stops the camera process without scheduling a restart. */
   async stop(cameraId: number, reason = 'stopped'): Promise<void> {
-    this.cancelRestart(cameraId);
-    await this.stopInternalAsync(cameraId, reason);
-    this.backoffs.delete(cameraId);
+    return this.enqueueLifecycle(cameraId, () => this.stopInternal(cameraId, reason));
   }
 
   /**
@@ -120,28 +145,44 @@ export class CameraProcessManager extends EventEmitter {
    * in status/heartbeats. Used when the camera is removed from the config.
    */
   async forget(cameraId: number, reason = 'camera removed'): Promise<void> {
-    await this.stop(cameraId, reason);
-    this.knownCameras.delete(cameraId);
+    return this.enqueueLifecycle(cameraId, () => this.forgetInternal(cameraId, reason));
   }
 
   /** Stops all processes (shutdown). */
   async stopAll(): Promise<void> {
-    const ids = [...this.processes.keys()];
-    await Promise.all(
-      ids.map(async (id) => {
-        const m = this.processes.get(id);
-        if (m) {
-          m.intentionallyStopped = true;
-          m.restartOnExit = false;
-          this.clearTimers(m);
+    this.shuttingDown = true;
+    this.cancelAllRestarts();
+
+    const failures: Array<{ cameraId: number; error: unknown }> = [];
+
+    if (this.lifecycleQueues.size > 0) {
+      const queueEntries = [...this.lifecycleQueues.entries()];
+      const queueResults = await Promise.allSettled(queueEntries.map(([, promise]) => promise));
+      for (let i = 0; i < queueResults.length; i++) {
+        const result = queueResults[i]!;
+        if (result.status === 'rejected') {
+          failures.push({ cameraId: queueEntries[i]![0], error: result.reason });
         }
-        await this.gracefulStop(id);
-      }),
-    );
+      }
+    }
+
+    if (this.processes.size > 0) {
+      const ids = [...this.processes.keys()];
+      const stopResults = await Promise.allSettled(ids.map((id) => this.stopOneForShutdown(id)));
+      for (let i = 0; i < stopResults.length; i++) {
+        const result = stopResults[i]!;
+        if (result.status === 'rejected') {
+          failures.push({ cameraId: ids[i]!, error: result.reason });
+        }
+      }
+    }
+
+    if (failures.length > 0 || this.processes.size > 0) {
+      throw new StopAllIncompleteError([...this.processes.keys()], failures);
+    }
+
     this.knownCameras.clear();
     this.backoffs.clear();
-    for (const timer of this.restartTimers.values()) clearTimeout(timer);
-    this.restartTimers.clear();
   }
 
   getState(cameraId: number): CameraProcessState | null {
@@ -185,7 +226,69 @@ export class CameraProcessManager extends EventEmitter {
       .filter((s): s is CameraProcessState => s !== null);
   }
 
+  private enqueueLifecycle(cameraId: number, op: () => Promise<void>): Promise<void> {
+    const previous = this.lifecycleQueues.get(cameraId) ?? Promise.resolve();
+    const run = previous.catch(() => {}).then(() => op());
+    this.lifecycleQueues.set(cameraId, run);
+    return run.finally(() => {
+      if (this.lifecycleQueues.get(cameraId) === run) {
+        this.lifecycleQueues.delete(cameraId);
+      }
+    });
+  }
+
+  private async startInternal(camera: AgentConfigCamera): Promise<void> {
+    if (this.shuttingDown) return;
+    const existing = this.processes.get(camera.id);
+    if (existing && !existing.child.killed && existing.child.exitCode === null && !existing.intentionallyStopped) {
+      this.deps.logger.debug({ cameraId: camera.id }, 'process already running, skipping start');
+      return;
+    }
+    if (existing) {
+      await this.stopProcessAsync(camera.id, 'configuration changed; restarting');
+    }
+    this.spawnProcess(camera);
+  }
+
+  private async forceRestartInternal(camera: AgentConfigCamera): Promise<void> {
+    if (this.shuttingDown) return;
+    this.cancelRestart(camera.id);
+    await this.stopProcessAsync(camera.id, 'force restart');
+    const backoff = this.backoffs.get(camera.id);
+    if (backoff) {
+      backoff.reset();
+    } else {
+      this.backoffs.delete(camera.id);
+    }
+    this.spawnProcess(camera);
+  }
+
+  private async stopInternal(cameraId: number, reason: string): Promise<void> {
+    this.cancelRestart(cameraId);
+    await this.stopProcessAsync(cameraId, reason);
+    this.backoffs.delete(cameraId);
+  }
+
+  private async forgetInternal(cameraId: number, reason: string): Promise<void> {
+    await this.stopInternal(cameraId, reason);
+    this.knownCameras.delete(cameraId);
+  }
+
+  private async stopOneForShutdown(cameraId: number): Promise<void> {
+    const m = this.processes.get(cameraId);
+    if (!m) return;
+    m.intentionallyStopped = true;
+    m.restartOnExit = false;
+    this.clearTimers(m);
+    await this.gracefulStop(cameraId);
+  }
+
   private spawnProcess(camera: AgentConfigCamera): void {
+    if (this.shuttingDown) {
+      this.deps.logger.info({ cameraId: camera.id }, 'shutdown in progress; skipping ffmpeg spawn');
+      return;
+    }
+
     const ffmpegPath = this.deps.ffmpegPath ?? env.FFMPEG_PATH;
     const args = buildFfmpegArgs(camera);
     this.deps.logger.info(
@@ -215,6 +318,11 @@ export class CameraProcessManager extends EventEmitter {
       return;
     }
 
+    let resolveClose!: () => void;
+    const closeSettled = new Promise<void>((resolve) => {
+      resolveClose = resolve;
+    });
+
     const managed: ManagedProcess = {
       camera,
       child,
@@ -231,6 +339,8 @@ export class CameraProcessManager extends EventEmitter {
       killTimer: null,
       healthTimer: null,
       startTimer: null,
+      closeSettled,
+      resolveClose,
     };
     this.processes.set(camera.id, managed);
     this.knownCameras.add(camera.id);
@@ -307,13 +417,22 @@ export class CameraProcessManager extends EventEmitter {
     });
 
     child.on('close', (code, signal) => {
-      this.onProcessExit(camera.id, code, signal);
+      try {
+        this.onProcessExit(camera.id, child, code, signal);
+      } finally {
+        resolveClose();
+      }
     });
   }
 
-  private onProcessExit(cameraId: number, code: number | null, signal: string | null): void {
+  private onProcessExit(
+    cameraId: number,
+    child: ChildProcess,
+    code: number | null,
+    signal: string | null,
+  ): void {
     const m = this.processes.get(cameraId);
-    if (!m) return;
+    if (!m || m.child !== child) return;
     this.clearTimers(m);
     this.processes.delete(cameraId);
     const wasHealthy = m.lastHealthyAt !== null;
@@ -323,7 +442,19 @@ export class CameraProcessManager extends EventEmitter {
       'ffmpeg exited',
     );
 
+    if (!m.lastError && !m.intentionallyStopped && m.recentLog.length > 0) {
+      this.deps.logger.warn(
+        { cameraId, cameraName: m.camera.name, code, recentLog: m.recentLog.slice(-12) },
+        'ffmpeg exited without a classified error line',
+      );
+    }
+
     if (m.intentionallyStopped && !m.restartOnExit) {
+      this.emitStateChange(this.getState(cameraId)!);
+      return;
+    }
+
+    if (this.shuttingDown) {
       this.emitStateChange(this.getState(cameraId)!);
       return;
     }
@@ -334,6 +465,7 @@ export class CameraProcessManager extends EventEmitter {
   }
 
   private scheduleRestart(camera: AgentConfigCamera, reason: string, wasHealthy = false): void {
+    if (this.shuttingDown) return;
     const backoff = this.backoffs.get(camera.id) ?? new ExponentialBackoff(env.RESTART_BASE_DELAY_SECONDS, env.RESTART_MAX_DELAY_SECONDS);
     this.backoffs.set(camera.id, backoff);
     if (wasHealthy) {
@@ -346,6 +478,7 @@ export class CameraProcessManager extends EventEmitter {
     );
     const timer = setTimeout(() => {
       this.restartTimers.delete(camera.id);
+      if (this.shuttingDown) return;
       if (this.processes.has(camera.id)) return;
       this.spawnProcess(camera);
     }, delay);
@@ -360,9 +493,14 @@ export class CameraProcessManager extends EventEmitter {
     }
   }
 
+  private cancelAllRestarts(): void {
+    for (const timer of this.restartTimers.values()) clearTimeout(timer);
+    this.restartTimers.clear();
+  }
+
   private checkHealth(cameraId: number): void {
     const m = this.processes.get(cameraId);
-    if (!m || m.intentionallyStopped) return;
+    if (!m || m.intentionallyStopped || this.shuttingDown) return;
     const lastUpdate = m.tracker.getLastUpdateAt();
     const stalled = lastUpdate === null || Date.now() - lastUpdate > env.FFMPEG_HEALTH_TIMEOUT_SECONDS * 1000;
     if (stalled) {
@@ -377,7 +515,7 @@ export class CameraProcessManager extends EventEmitter {
       m.intentionallyStopped = false;
       this.emitStateChange(this.getState(cameraId)!);
       this.clearTimers(m);
-      void this.gracefulStop(cameraId);
+      this.gracefulStopFireAndForget(cameraId, 'health timeout');
       return;
     }
     const timer = setTimeout(() => this.checkHealth(cameraId), env.FFMPEG_HEALTH_TIMEOUT_SECONDS * 1000);
@@ -388,7 +526,7 @@ export class CameraProcessManager extends EventEmitter {
   /** Kills a process that never produced its first frame within the startup timeout. */
   private checkStartTimeout(cameraId: number): void {
     const m = this.processes.get(cameraId);
-    if (!m || m.intentionallyStopped) return;
+    if (!m || m.intentionallyStopped || this.shuttingDown) return;
     if (m.lastHealthyAt !== null) return; // reached STREAMING; nothing to do
     this.deps.logger.warn(
       { cameraId, cameraName: m.camera.name, timeoutMs: env.FFMPEG_START_TIMEOUT_MS },
@@ -401,7 +539,7 @@ export class CameraProcessManager extends EventEmitter {
     m.intentionallyStopped = false;
     this.emitStateChange(this.getState(cameraId)!);
     this.clearTimers(m);
-    void this.gracefulStop(cameraId);
+    this.gracefulStopFireAndForget(cameraId, 'start timeout');
   }
 
   /** Resets the backoff counter once the stream has been healthy long enough. */
@@ -414,7 +552,7 @@ export class CameraProcessManager extends EventEmitter {
     }
   }
 
-  private stopInternalAsync(cameraId: number, reason: string): Promise<void> {
+  private stopProcessAsync(cameraId: number, reason: string): Promise<void> {
     const m = this.processes.get(cameraId);
     if (!m) return Promise.resolve();
     this.deps.logger.info({ cameraId, reason }, 'stopping ffmpeg');
@@ -424,34 +562,105 @@ export class CameraProcessManager extends EventEmitter {
     return this.gracefulStop(cameraId);
   }
 
+  private gracefulStopFireAndForget(cameraId: number, context: string): void {
+    void this.gracefulStop(cameraId).catch((err: unknown) => {
+      if (err instanceof ProcessTerminationError) {
+        this.deps.logger.error(
+          { cameraId, context, err: err.message },
+          'ffmpeg graceful stop failed; process remains tracked in ERROR',
+        );
+        return;
+      }
+      this.deps.logger.error(
+        { cameraId, context, err: err instanceof Error ? err.message : err },
+        'unexpected error during ffmpeg graceful stop',
+      );
+    });
+  }
+
   /** Sends 'q' to FFmpeg stdin for a clean FLV flush, then SIGKILL on timeout. */
   private async gracefulStop(cameraId: number): Promise<void> {
     const m = this.processes.get(cameraId);
     if (!m) return;
-    const child = m.child;
-    try {
-      child.stdin?.write('q');
-    } catch {
-      /* stdin closed */
-    }
-    const killed = await new Promise<boolean>((resolve) => {
-      const timer = setTimeout(() => {
-        if (child.exitCode === null) {
-          this.deps.logger.warn({ cameraId }, 'ffmpeg did not exit after SIGTERM, forcing SIGKILL');
-          if (this.deps.killProcess) {
-            this.deps.killProcess(child.pid!);
-          } else {
-            child.kill('SIGKILL');
-          }
-        }
-        resolve(false);
-      }, env.FFMPEG_KILL_TIMEOUT_MS);
-      child.once('exit', () => {
-        clearTimeout(timer);
-        resolve(true);
-      });
+    const { child, closeSettled } = m;
+    let closed = false;
+    void closeSettled.then(() => {
+      closed = true;
     });
-    if (!killed) return;
+
+    if (child.exitCode === null && child.signalCode === null) {
+      try {
+        child.stdin?.write('q');
+      } catch {
+        /* stdin closed */
+      }
+
+      await Promise.race([closeSettled, this.delay(env.FFMPEG_KILL_TIMEOUT_MS)]);
+
+      if (!closed && child.exitCode === null && child.signalCode === null) {
+        this.deps.logger.warn({ cameraId }, 'ffmpeg did not exit gracefully, forcing SIGKILL');
+        if (this.deps.killProcess) {
+          this.deps.killProcess(child.pid!);
+        } else {
+          child.kill('SIGKILL');
+        }
+        await Promise.race([closeSettled, this.delay(env.FFMPEG_KILL_TIMEOUT_MS)]);
+      }
+    } else {
+      await Promise.race([closeSettled, this.delay(env.FFMPEG_KILL_TIMEOUT_MS)]);
+    }
+
+    if (closed) return;
+
+    if (this.isTerminationConfirmed(child)) {
+      this.deps.logger.warn(
+        { cameraId, pid: child.pid ?? null, exitCode: child.exitCode, signalCode: child.signalCode },
+        'ffmpeg close never arrived but termination is confirmed; finalizing cleanup',
+      );
+      this.finalizeWithoutCloseEvent(cameraId, child);
+      return;
+    }
+
+    this.deps.logger.error(
+      { cameraId, pid: child.pid ?? null },
+      'ffmpeg termination unconfirmed after forced kill',
+    );
+    this.markUnconfirmedTerminationError(cameraId, child);
+    throw new ProcessTerminationError(cameraId, 'ffmpeg termination unconfirmed after forced kill');
+  }
+
+  private isTerminationConfirmed(child: ChildProcess): boolean {
+    return child.exitCode !== null || child.signalCode !== null;
+  }
+
+  private finalizeWithoutCloseEvent(cameraId: number, child: ChildProcess): void {
+    const m = this.processes.get(cameraId);
+    if (!m || m.child !== child) return;
+    this.clearTimers(m);
+    this.processes.delete(cameraId);
+    this.emitStateChange(this.getState(cameraId)!);
+    m.resolveClose();
+  }
+
+  private markUnconfirmedTerminationError(cameraId: number, child: ChildProcess): void {
+    const m = this.processes.get(cameraId);
+    if (!m || m.child !== child) return;
+    this.clearTimers(m);
+    m.status = 'ERROR';
+    m.lastError = 'ffmpeg termination unconfirmed after forced kill';
+    m.lastErrorCategory = 'generic';
+    m.intentionallyStopped = true;
+    m.restartOnExit = false;
+    this.emitStateChange(this.getState(cameraId)!);
+    // Do not resolve closeSettled: close is not confirmed; a later lifecycle op
+    // performs a fresh bounded termination attempt and waits for real close/exit.
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(resolve, ms);
+      timer.unref?.();
+    });
   }
 
   private clearTimers(m: ManagedProcess): void {
